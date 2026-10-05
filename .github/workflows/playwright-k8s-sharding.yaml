@@ -10,6 +10,22 @@ jobs:
   test:
     runs-on: ubuntu-latest
     
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root_password
+          MYSQL_DATABASE: employee_db
+          MYSQL_USER: emp_app
+          MYSQL_PASSWORD: ""
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+        ports:
+          - 3306:3306
+    
     steps:
       - uses: actions/checkout@v4
       
@@ -25,13 +41,39 @@ jobs:
           pip install -r requirements.txt
           playwright install chromium
       
+      - name: Setup database
+        run: |
+          mysql -h 127.0.0.1 -u emp_app << 'MYSQL_EOF'
+          CREATE TABLE IF NOT EXISTS employee_db.employees (
+            employee_id VARCHAR(20) PRIMARY KEY,
+            employee_name VARCHAR(100) NOT NULL,
+            salary DECIMAL(12, 2) NOT NULL,
+            designation VARCHAR(100) NOT NULL,
+            city VARCHAR(100) NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          );
+          MYSQL_EOF
+      
+      - name: Start Flask app
+        run: |
+          python app.py > /tmp/flask.log 2>&1 &
+          sleep 3
+          curl -f http://localhost:5000/ || (cat /tmp/flask.log && exit 1)
+      
       - name: Run Playwright tests
         env:
           FLASK_URL: http://localhost:5000
-          DB_HOST: localhost
+          DB_HOST: 127.0.0.1
           DB_USER: emp_app
           DB_PASSWORD: ""
           DB_NAME: employee_db
           PYTHONPATH: ${{ github.workspace }}
         run: |
-          pytest tests/testEmployeeForm.py -v --tb=short
+          pytest tests/testEmployeeForm.py -v --tb=short --json-report --json-report-file=test-results.json
+      
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: test-results.json
