@@ -1,6 +1,6 @@
 # .github/workflows/k8s-sharding-tests.yml
 
-name: Playwright Employee Form Tests - K8s Sharding
+name: Playwright Employee Form Tests (Headless K8s Sharding)
 
 on:
   push:
@@ -11,7 +11,6 @@ on:
 env:
   DOCKER_REGISTRY: digvijayanney
   IMAGE_NAME: flask-app
-  FLASK_URL: ${{ secrets.FLASK_INSTANCE_URL || 'http://localhost:5000' }}
 
 jobs:
   build-and-push:
@@ -20,20 +19,25 @@ jobs:
       image-tag: ${{ github.sha }}
     
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       
-      - name: Build Docker image
-        run: |
-          docker build -t $DOCKER_REGISTRY/$IMAGE_NAME:${{ github.sha }} .
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
       
       - name: Login to Docker Hub
-        run: |
-          echo "${{ secrets.DOCKER_PASSWORD }}" | \
-            docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
       
-      - name: Push to Docker Hub
-        run: |
-          docker push $DOCKER_REGISTRY/$IMAGE_NAME:${{ github.sha }}
+      - name: Build and Push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   test-k8s-sharding:
     needs: build-and-push
@@ -59,7 +63,7 @@ jobs:
           - 3306:3306
       
       flask-app:
-        image: ${{ vars.DOCKER_REGISTRY }}/${{ vars.IMAGE_NAME }}:${{ github.sha }}
+        image: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
         env:
           DB_HOST: mysql
           DB_PORT: 3306
@@ -76,40 +80,45 @@ jobs:
           - 5000:5000
     
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
       
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      
       - name: Install dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
           playwright install chromium
       
-      - name: Wait for Flask app to be ready
+      - name: Wait for Flask app
         run: |
-          FLASK_URL="${{ env.FLASK_URL }}"
-          echo "Waiting for Flask app at: $FLASK_URL"
-          
+          echo "⏳ Waiting for Flask app at http://localhost:5000..."
           for i in {1..30}; do
-            if curl -f "$FLASK_URL/" 2>/dev/null; then
+            if curl -f http://localhost:5000/ 2>/dev/null; then
               echo "✅ Flask app is ready!"
-              break
+              exit 0
             fi
-            echo "Attempt $i/30: Waiting for Flask app..."
+            echo "Attempt $i/30..."
             sleep 2
           done
+          echo "❌ Flask app failed to start"
+          exit 1
       
       - name: Setup database
-        env:
-          DB_HOST: 127.0.0.1
-          DB_PORT: 3306
-          DB_USER: emp_app
-          DB_PASSWORD: ""
         run: |
-          mysql -h $DB_HOST -u $DB_USER << 'MYSQL_EOF'
+          echo "🗄️  Setting up database..."
+          mysql -h 127.0.0.1 -u emp_app << 'MYSQL_EOF'
           CREATE TABLE IF NOT EXISTS employee_db.employees (
             employee_id VARCHAR(20) PRIMARY KEY,
             employee_name VARCHAR(100) NOT NULL,
@@ -119,31 +128,36 @@ jobs:
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
           );
           MYSQL_EOF
-          
           echo "✅ Database ready"
       
-      - name: Run tests (Shard ${{ matrix.shard }}/4)
+      - name: Run Headless Tests (Shard ${{ matrix.shard }}/4)
         env:
-          FLASK_URL: ${{ env.FLASK_URL }}
+          FLASK_URL: http://localhost:5000
           DB_HOST: 127.0.0.1
           DB_PORT: 3306
           DB_USER: emp_app
           DB_PASSWORD: ""
           DB_NAME: employee_db
         run: |
-          echo "Running Shard ${{ matrix.shard }}/4"
-          echo "FLASK_URL: $FLASK_URL"
-          
+          echo "🎭 Running Tests (Headless - Shard ${{ matrix.shard }}/4)"
           pytest tests/test_employee_crud.py \
             --shard=${{ matrix.shard }}/4 \
             -v \
             --tb=short \
             --json-report \
             --json-report-file=report_shard_${{ matrix.shard }}.json
+          
+          # Check if tests passed
+          if [ $? -eq 0 ]; then
+            echo "✅ Shard ${{ matrix.shard }}/4 - ALL TESTS PASSED"
+          else
+            echo "❌ Shard ${{ matrix.shard }}/4 - SOME TESTS FAILED"
+            exit 1
+          fi
       
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: test-report-shard-${{ matrix.shard }}
           path: report_shard_*.json
@@ -155,29 +169,32 @@ jobs:
     if: always()
     
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
       
       - name: Download all artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
       
       - name: Merge test results
+        id: merge
         run: |
           python3 << 'EOF'
           import json
           import glob
-          import os
+          import sys
           
           all_tests = []
           all_failed = []
           
           # Find all report files
-          for report_file in glob.glob('test-report-shard-*/report_shard_*.json'):
-              print(f"Processing: {report_file}")
+          for report_file in glob.glob('artifacts/**/report_shard_*.json', recursive=True):
+              print(f"📄 Processing: {report_file}")
               try:
                   with open(report_file) as f:
                       data = json.load(f)
@@ -185,7 +202,7 @@ jobs:
                           all_tests.extend(data['tests'])
                           all_failed.extend([t for t in data['tests'] if t['outcome'] == 'failed'])
               except json.JSONDecodeError as e:
-                  print(f"Error reading {report_file}: {e}")
+                  print(f"⚠️  Error reading {report_file}: {e}")
           
           summary = {
               'total_tests': len(all_tests),
@@ -195,59 +212,67 @@ jobs:
               'failed_tests': [t['nodeid'] for t in all_failed]
           }
           
-          print(f"\n{'='*60}")
-          print(f"TEST SUMMARY")
-          print(f"{'='*60}")
-          print(f"Total Tests:  {summary['total_tests']}")
-          print(f"Passed:       {summary['passed']}")
-          print(f"Failed:       {summary['failed']}")
-          print(f"Skipped:      {summary['skipped']}")
+          print(f"\n{'='*70}")
+          print(f"✅ TEST SUMMARY (HEADLESS - 4 PARALLEL SHARDS)")
+          print(f"{'='*70}")
+          print(f"Total Tests:   {summary['total_tests']}")
+          print(f"✅ Passed:     {summary['passed']}")
+          print(f"❌ Failed:     {summary['failed']}")
+          print(f"⏭️  Skipped:    {summary['skipped']}")
+          print(f"{'='*70}\n")
           
           if summary['failed'] > 0:
-              print(f"\nFailed Tests (showing first 10):")
+              print("❌ TESTS FAILED - PR CANNOT BE MERGED")
+              print("\nFailed Tests (first 10):")
               for test in summary['failed_tests'][:10]:
                   print(f"  ❌ {test}")
-          
-          print(f"\n{'='*60}\n")
+              sys.exit(1)
+          else:
+              print("✅ ALL TESTS PASSED - PR CAN BE MERGED")
           
           with open('test_summary.json', 'w') as f:
               json.dump(summary, f, indent=2)
-          
-          # Exit with error if any tests failed
-          if summary['failed'] > 0:
-              exit(1)
           EOF
       
       - name: Comment PR with results
         if: github.event_name == 'pull_request' && always()
-        uses: actions/github-script@v6
+        uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
             let summary = { total_tests: 0, passed: 0, failed: 0, skipped: 0 };
-            
             try {
               summary = JSON.parse(fs.readFileSync('test_summary.json', 'utf-8'));
             } catch (e) {
-              console.log('Could not read summary:', e);
+              console.log('⚠️  Could not read summary');
             }
             
             const emoji = summary.failed === 0 ? '✅' : '❌';
+            const status = summary.failed === 0 
+              ? '**Status: READY TO MERGE** 🚀' 
+              : '**Status: BLOCKED - FIX TESTS BEFORE MERGE** 🚫';
+            
+            const failedList = summary.failed_tests && summary.failed_tests.length > 0
+              ? `**Failed Tests (first 10):**\n${summary.failed_tests.slice(0, 10).map(t => '- `' + t + '`').join('\n')}`
+              : '✨ All tests passed!';
+            
             const comment = `
-            ${emoji} **Playwright Employee Form Tests (K8s Sharding)**
+            ${emoji} **Playwright Employee Form Tests (Headless K8s Sharding)**
             
             | Metric | Count |
             |--------|-------|
             | Total Tests | ${summary.total_tests} |
-            | Passed ✅ | ${summary.passed} |
-            | Failed ❌ | ${summary.failed} |
-            | Skipped ⏭️ | ${summary.skipped} |
+            | ✅ Passed | ${summary.passed} |
+            | ❌ Failed | ${summary.failed} |
+            | ⏭️ Skipped | ${summary.skipped} |
             
             **Execution:**
-            - 4 parallel K8s pods (shards)
-            - Flask URL: ${{ secrets.FLASK_INSTANCE_URL }}
+            - 4 parallel headless K8s pods (shards)
+            - Duration: ~5-7 minutes
             
-            ${summary.failed > 0 ? `**Failed Tests (first 5):**\n${summary.failed_tests.slice(0, 5).map(t => '- \`' + t + '\`').join('\n')}` : '✅ All tests passed! 🎉'}
+            ${status}
+            
+            ${failedList}
             `;
             
             github.rest.issues.createComment({
