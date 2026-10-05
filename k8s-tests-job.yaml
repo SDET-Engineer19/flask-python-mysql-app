@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: playwright
-        image: digvijayanney/flask-tests:latest
+        image: digvijayanney/flask-tests:1.0
         imagePullPolicy: Always
         env:
         - name: FLASK_URL
@@ -32,6 +32,10 @@ spec:
           value: "employee_db"
         - name: PYTHONPATH
           value: "/app"
+        - name: SHARD_INDEX
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.annotations['batch.kubernetes.io/job-completion-index']
         resources:
           requests:
             cpu: "100m"

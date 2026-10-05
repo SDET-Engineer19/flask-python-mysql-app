@@ -1,20 +1,12 @@
-FROM python:3.12-slim
+FROM mcr.microsoft.com/playwright/python:v1.40.0-jammy
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
-    libwoff1 libopus0 libwebp6 libwebpdemux2 libenchant-2-2 \
-    libgudev-1.0-0 libsecret-1-0 libhyphen0 libgdk-pixbuf2.0-0 \
-    libegl1 libnotify4 libxslt1.1 libatspi2.0-0 libatk1.0-0 \
-    libepoxy0 libgstreamer-gl1.0-0 libgstreamer1.0-0 \
-    && rm -rf /var/lib/apt/lists/*
-
 COPY requirements.txt pytest.ini conftest.py ./
 RUN pip install --no-cache-dir -r requirements.txt
-RUN playwright install chromium
 
 COPY tests/ tests/
 COPY pageObjects/ pageObjects/
