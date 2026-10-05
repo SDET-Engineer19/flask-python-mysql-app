@@ -7,9 +7,11 @@ on:
     branches: [main]
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    
+  playwright-e2e-k8-shard-test:
+    runs-on: ubuntu-latest 
+    strategy:
+       matrix:
+        shard: [1, 2, 3, 4]
     services:
       mysql:
         image: mysql:8.0
@@ -80,7 +82,7 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
         run: |
           echo "🎭 Running Playwright tests..."
-          pytest tests/testEmployeeForm.py -v --tb=short
+          pytest tests/ -v {{ matrix.shard }}/4 
       
       - name: Upload test results
         if: always()
