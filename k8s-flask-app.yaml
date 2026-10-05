@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flask-app
+  namespace: default
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: flask-app
+  template:
+    metadata:
+      labels:
+        app: flask-app
+    spec:
+      containers:
+      - name: flask
+        image: digvijayanney/flask-app:1.0
+        ports:
+        - containerPort: 5000
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+        env:
+        - name: DB_HOST
+          value: "mysql-service"
+        - name: DB_PORT
+          value: "3306"
+        - name: DB_USER
+          value: "emp_app"
+        - name: DB_PASSWORD
+          value: ""
+        - name: DB_NAME
+          value: "employee_db"
+        - name: FLASK_SECRET_KEY
+          value: "test-secret-key"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: flask-app-service
+  namespace: default
+spec:
+  selector:
+    app: flask-app
+  ports:
+  - port: 5000
+    targetPort: 5000
+  type: ClusterIP

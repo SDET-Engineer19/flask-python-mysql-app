@@ -1,0 +1,17 @@
+FROM mcr.microsoft.com/playwright/python:v1.40.0-jammy
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+COPY requirements.txt pytest.ini conftest.py ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY tests/ tests/
+COPY pageObjects/ pageObjects/
+
+RUN useradd --create-home appuser
+USER appuser
+
+CMD ["pytest", "tests/", "-v", "--tb=short"]

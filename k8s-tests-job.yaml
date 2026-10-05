@@ -1,0 +1,46 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: flask-playwright-tests
+  namespace: default
+spec:
+  parallelism: 4
+  completions: 4
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app: flask-tests
+    spec:
+      containers:
+      - name: playwright
+        image: digvijayanney/flask-tests:1.0
+        imagePullPolicy: Always
+        env:
+        - name: FLASK_URL
+          value: "http://flask-app-service:5000"
+        - name: DB_HOST
+          value: "mysql-service"
+        - name: DB_PORT
+          value: "3306"
+        - name: DB_USER
+          value: "emp_app"
+        - name: DB_PASSWORD
+          value: ""
+        - name: DB_NAME
+          value: "employee_db"
+        - name: PYTHONPATH
+          value: "/app"
+        - name: SHARD_INDEX
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.annotations['batch.kubernetes.io/job-completion-index']
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+      restartPolicy: Never
