@@ -1,0 +1,258 @@
+# .github/workflows/k8s-sharding-tests.yml
+
+name: Playwright Employee Form Tests - K8s Sharding
+
+on:
+  push:
+    branches: [main, feature/add-playwright-tests]
+  pull_request:
+    branches: [main]
+
+env:
+  DOCKER_REGISTRY: digvijayanney
+  IMAGE_NAME: flask-app
+  FLASK_URL: ${{ secrets.FLASK_INSTANCE_URL || 'http://localhost:5000' }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ github.sha }}
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Build Docker image
+        run: |
+          docker build -t $DOCKER_REGISTRY/$IMAGE_NAME:${{ github.sha }} .
+      
+      - name: Login to Docker Hub
+        run: |
+          echo "${{ secrets.DOCKER_PASSWORD }}" | \
+            docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+      
+      - name: Push to Docker Hub
+        run: |
+          docker push $DOCKER_REGISTRY/$IMAGE_NAME:${{ github.sha }}
+
+  test-k8s-sharding:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        shard: [1, 2, 3, 4]
+    
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root_password
+          MYSQL_DATABASE: employee_db
+          MYSQL_USER: emp_app
+          MYSQL_PASSWORD: ""
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+        ports:
+          - 3306:3306
+      
+      flask-app:
+        image: ${{ vars.DOCKER_REGISTRY }}/${{ vars.IMAGE_NAME }}:${{ github.sha }}
+        env:
+          DB_HOST: mysql
+          DB_PORT: 3306
+          DB_USER: emp_app
+          DB_PASSWORD: ""
+          DB_NAME: employee_db
+          FLASK_SECRET_KEY: test-secret-key
+        options: >-
+          --health-cmd="curl -f http://localhost:5000/ || exit 1"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+        ports:
+          - 5000:5000
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium
+      
+      - name: Wait for Flask app to be ready
+        run: |
+          FLASK_URL="${{ env.FLASK_URL }}"
+          echo "Waiting for Flask app at: $FLASK_URL"
+          
+          for i in {1..30}; do
+            if curl -f "$FLASK_URL/" 2>/dev/null; then
+              echo "✅ Flask app is ready!"
+              break
+            fi
+            echo "Attempt $i/30: Waiting for Flask app..."
+            sleep 2
+          done
+      
+      - name: Setup database
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_USER: emp_app
+          DB_PASSWORD: ""
+        run: |
+          mysql -h $DB_HOST -u $DB_USER << 'MYSQL_EOF'
+          CREATE TABLE IF NOT EXISTS employee_db.employees (
+            employee_id VARCHAR(20) PRIMARY KEY,
+            employee_name VARCHAR(100) NOT NULL,
+            salary DECIMAL(12, 2) NOT NULL,
+            designation VARCHAR(100) NOT NULL,
+            city VARCHAR(100) NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          );
+          MYSQL_EOF
+          
+          echo "✅ Database ready"
+      
+      - name: Run tests (Shard ${{ matrix.shard }}/4)
+        env:
+          FLASK_URL: ${{ env.FLASK_URL }}
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_USER: emp_app
+          DB_PASSWORD: ""
+          DB_NAME: employee_db
+        run: |
+          echo "Running Shard ${{ matrix.shard }}/4"
+          echo "FLASK_URL: $FLASK_URL"
+          
+          pytest tests/test_employee_crud.py \
+            --shard=${{ matrix.shard }}/4 \
+            -v \
+            --tb=short \
+            --json-report \
+            --json-report-file=report_shard_${{ matrix.shard }}.json
+      
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: test-report-shard-${{ matrix.shard }}
+          path: report_shard_*.json
+          retention-days: 7
+  
+  merge-results:
+    needs: test-k8s-sharding
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+      
+      - name: Merge test results
+        run: |
+          python3 << 'EOF'
+          import json
+          import glob
+          import os
+          
+          all_tests = []
+          all_failed = []
+          
+          # Find all report files
+          for report_file in glob.glob('test-report-shard-*/report_shard_*.json'):
+              print(f"Processing: {report_file}")
+              try:
+                  with open(report_file) as f:
+                      data = json.load(f)
+                      if 'tests' in data:
+                          all_tests.extend(data['tests'])
+                          all_failed.extend([t for t in data['tests'] if t['outcome'] == 'failed'])
+              except json.JSONDecodeError as e:
+                  print(f"Error reading {report_file}: {e}")
+          
+          summary = {
+              'total_tests': len(all_tests),
+              'passed': len([t for t in all_tests if t['outcome'] == 'passed']),
+              'failed': len([t for t in all_tests if t['outcome'] == 'failed']),
+              'skipped': len([t for t in all_tests if t['outcome'] == 'skipped']),
+              'failed_tests': [t['nodeid'] for t in all_failed]
+          }
+          
+          print(f"\n{'='*60}")
+          print(f"TEST SUMMARY")
+          print(f"{'='*60}")
+          print(f"Total Tests:  {summary['total_tests']}")
+          print(f"Passed:       {summary['passed']}")
+          print(f"Failed:       {summary['failed']}")
+          print(f"Skipped:      {summary['skipped']}")
+          
+          if summary['failed'] > 0:
+              print(f"\nFailed Tests (showing first 10):")
+              for test in summary['failed_tests'][:10]:
+                  print(f"  ❌ {test}")
+          
+          print(f"\n{'='*60}\n")
+          
+          with open('test_summary.json', 'w') as f:
+              json.dump(summary, f, indent=2)
+          
+          # Exit with error if any tests failed
+          if summary['failed'] > 0:
+              exit(1)
+          EOF
+      
+      - name: Comment PR with results
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            let summary = { total_tests: 0, passed: 0, failed: 0, skipped: 0 };
+            
+            try {
+              summary = JSON.parse(fs.readFileSync('test_summary.json', 'utf-8'));
+            } catch (e) {
+              console.log('Could not read summary:', e);
+            }
+            
+            const emoji = summary.failed === 0 ? '✅' : '❌';
+            const comment = `
+            ${emoji} **Playwright Employee Form Tests (K8s Sharding)**
+            
+            | Metric | Count |
+            |--------|-------|
+            | Total Tests | ${summary.total_tests} |
+            | Passed ✅ | ${summary.passed} |
+            | Failed ❌ | ${summary.failed} |
+            | Skipped ⏭️ | ${summary.skipped} |
+            
+            **Execution:**
+            - 4 parallel K8s pods (shards)
+            - Flask URL: ${{ secrets.FLASK_INSTANCE_URL }}
+            
+            ${summary.failed > 0 ? `**Failed Tests (first 5):**\n${summary.failed_tests.slice(0, 5).map(t => '- \`' + t + '\`').join('\n')}` : '✅ All tests passed! 🎉'}
+            `;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
