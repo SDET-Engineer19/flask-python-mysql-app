@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  test:
+  playwright-e2e-k8s-sharding-test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
