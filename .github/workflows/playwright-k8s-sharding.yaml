@@ -82,7 +82,7 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
         run: |
           echo "🎭 Running Playwright tests..."
-          pytest tests/ -v {{ matrix.shard }}/4 
+          pytest tests/ -v --shard=${{ matrix.shard }}/4
       
       - name: Upload test results
         if: always()
