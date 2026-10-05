@@ -145,7 +145,15 @@ jobs:
             -v \
             --tb=short \
             --json-report \
-            --json-report-file=report_shard_${{ matrix.shard }}.json || true
+            --json-report-file=report_shard_${{ matrix.shard }}.json
+          
+          # Check if tests passed
+          if [ $? -eq 0 ]; then
+            echo "✅ Shard ${{ matrix.shard }}/4 - ALL TESTS PASSED"
+          else
+            echo "❌ Shard ${{ matrix.shard }}/4 - SOME TESTS FAILED"
+            exit 1
+          fi
       
       - name: Upload test results
         if: always()
@@ -174,16 +182,17 @@ jobs:
           path: artifacts/
       
       - name: Merge test results
+        id: merge
         run: |
           python3 << 'EOF'
           import json
           import glob
-          import os
+          import sys
           
           all_tests = []
           all_failed = []
           
-          # Find all report files in artifacts directory
+          # Find all report files
           for report_file in glob.glob('artifacts/**/report_shard_*.json', recursive=True):
               print(f"📄 Processing: {report_file}")
               try:
@@ -213,11 +222,13 @@ jobs:
           print(f"{'='*70}\n")
           
           if summary['failed'] > 0:
-              print("Failed Tests (first 5):")
-              for test in summary['failed_tests'][:5]:
+              print("❌ TESTS FAILED - PR CANNOT BE MERGED")
+              print("\nFailed Tests (first 10):")
+              for test in summary['failed_tests'][:10]:
                   print(f"  ❌ {test}")
+              sys.exit(1)
           else:
-              print("✨ All tests passed!")
+              print("✅ ALL TESTS PASSED - PR CAN BE MERGED")
           
           with open('test_summary.json', 'w') as f:
               json.dump(summary, f, indent=2)
@@ -237,8 +248,12 @@ jobs:
             }
             
             const emoji = summary.failed === 0 ? '✅' : '❌';
+            const status = summary.failed === 0 
+              ? '**Status: READY TO MERGE** 🚀' 
+              : '**Status: BLOCKED - FIX TESTS BEFORE MERGE** 🚫';
+            
             const failedList = summary.failed_tests && summary.failed_tests.length > 0
-              ? `**Failed Tests (first 5):**\n${summary.failed_tests.slice(0, 5).map(t => '- `' + t + '`').join('\n')}`
+              ? `**Failed Tests (first 10):**\n${summary.failed_tests.slice(0, 10).map(t => '- `' + t + '`').join('\n')}`
               : '✨ All tests passed!';
             
             const comment = `
@@ -254,6 +269,8 @@ jobs:
             **Execution:**
             - 4 parallel headless K8s pods (shards)
             - Duration: ~5-7 minutes
+            
+            ${status}
             
             ${failedList}
             `;
