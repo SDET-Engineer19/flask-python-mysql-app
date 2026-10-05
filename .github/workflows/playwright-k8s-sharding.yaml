@@ -43,7 +43,8 @@ jobs:
       
       - name: Setup database
         run: |
-          mysql -h 127.0.0.1 -u emp_app << 'MYSQL_EOF'
+          echo "🗄️ Setting up MySQL database..."
+          mysql -h 127.0.0.1 -u root -proot_password << 'MYSQL_EOF'
           CREATE TABLE IF NOT EXISTS employee_db.employees (
             employee_id VARCHAR(20) PRIMARY KEY,
             employee_name VARCHAR(100) NOT NULL,
@@ -53,27 +54,40 @@ jobs:
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
           );
           MYSQL_EOF
+          echo "✅ Database setup complete"
       
       - name: Start Flask app
         run: |
+          echo "🚀 Starting Flask app..."
           python app.py > /tmp/flask.log 2>&1 &
           sleep 3
-          curl -f http://localhost:5000/ || (cat /tmp/flask.log && exit 1)
+          if curl -f http://localhost:5000/ 2>/dev/null; then
+            echo "✅ Flask app is running"
+          else
+            echo "❌ Flask app failed to start"
+            cat /tmp/flask.log
+            exit 1
+          fi
       
       - name: Run Playwright tests
         env:
           FLASK_URL: http://localhost:5000
           DB_HOST: 127.0.0.1
+          DB_PORT: 3306
           DB_USER: emp_app
           DB_PASSWORD: ""
           DB_NAME: employee_db
           PYTHONPATH: ${{ github.workspace }}
         run: |
-          pytest tests/testEmployeeForm.py -v --tb=short --json-report --json-report-file=test-results.json
+          echo "🎭 Running Playwright tests..."
+          pytest tests/testEmployeeForm.py -v --tb=short
       
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-results
-          path: test-results.json
+          path: |
+            test-*.json
+            pytest-report.html
+          retention-days: 7
