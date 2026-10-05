@@ -73,7 +73,7 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
         run: |
           echo "Testing against: $FLASK_URL"
-          pytest tests/ -v --tb=short --shard=${{ matrix.shard }}/4
+          pytest tests/ -v --tb=short
       
       - name: Upload test results
         if: always()
