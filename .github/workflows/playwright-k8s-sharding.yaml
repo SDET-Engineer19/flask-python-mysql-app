@@ -64,7 +64,7 @@ jobs:
       
       - name: Run Playwright tests [Shard ${{ matrix.shard }}/4]
         env:
-          FLASK_URL: http://localhost:5000
+          FLASK_URL: ${{ secrets.FLASK_INSTANCE_URL || 'http://localhost:5000' }}
           DB_HOST: 127.0.0.1
           DB_PORT: 3306
           DB_USER: emp_app
@@ -72,7 +72,8 @@ jobs:
           DB_NAME: employee_db
           PYTHONPATH: ${{ github.workspace }}
         run: |
-          pytest tests/ -v --tb=short
+          echo "Testing against: $FLASK_URL"
+          pytest tests/ -v --tb=short --shard=${{ matrix.shard }}/4
       
       - name: Upload test results
         if: always()
