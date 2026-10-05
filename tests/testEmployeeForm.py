@@ -1,7 +1,7 @@
 from pageObjects.employeePage import EmployeePage
 
 
-class testEmployeeForm:
+class TestEmployeeForm:
 
     def test_employee_form_fields(self, page):
       emp_page = EmployeePage(page)

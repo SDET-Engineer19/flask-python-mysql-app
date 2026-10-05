@@ -1,1 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+env/
+.venv
+
+# Pytest
+.pytest_cache/
+.pytest_tmp/
+*.json
+report.json
+report_shard_*.json
+.htmlreport/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
 .DS_Store
+.env.local
+.env
+
+# Test coverage
+.coverage
+htmlcov/
