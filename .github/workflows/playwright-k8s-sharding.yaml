@@ -4,7 +4,7 @@ name: Playwright Employee Form Tests (Headless K8s Sharding)
 
 on:
   push:
-    branches: [main, feature/add-playwright-tests]
+    branches: [main]
   pull_request:
     branches: [main]
 
