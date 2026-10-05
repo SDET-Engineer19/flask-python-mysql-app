@@ -7,11 +7,12 @@ on:
     branches: [main]
 
 jobs:
-  playwright-e2e-k8-shard-test:
-    runs-on: ubuntu-latest 
+  test:
+    runs-on: ubuntu-latest
     strategy:
-       matrix:
+      matrix:
         shard: [1, 2, 3, 4]
+    
     services:
       mysql:
         image: mysql:8.0
@@ -31,22 +32,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: 'pip'
       
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
+          python -m pip install --upgrade pip setuptools wheel
           pip install -r requirements.txt
-          pip install pytest-xdist
+          pip install pytest-xdist==3.5.0 --force-reinstall
           playwright install chromium
+      
+      - name: Verify pytest-xdist installation
+        run: |
+          pip list | grep -i xdist
+          pytest --version
+          pytest --co -q 2>&1 | head -20
       
       - name: Setup database
         run: |
-          echo "🗄️ Setting up MySQL database..."
           mysql -h 127.0.0.1 -u root -proot_password << 'MYSQL_EOF'
           CREATE TABLE IF NOT EXISTS employee_db.employees (
             employee_id VARCHAR(20) PRIMARY KEY,
@@ -57,22 +62,14 @@ jobs:
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
           );
           MYSQL_EOF
-          echo "✅ Database setup complete"
       
       - name: Start Flask app
         run: |
-          echo "🚀 Starting Flask app..."
           python app.py > /tmp/flask.log 2>&1 &
           sleep 3
-          if curl -f http://localhost:5000/ 2>/dev/null; then
-            echo "✅ Flask app is running"
-          else
-            echo "❌ Flask app failed to start"
-            cat /tmp/flask.log
-            exit 1
-          fi
+          curl -f http://localhost:5000/ || (cat /tmp/flask.log && exit 1)
       
-      - name: Run Playwright tests
+      - name: Run Playwright tests (Shard ${{ matrix.shard }}/4)
         env:
           FLASK_URL: http://localhost:5000
           DB_HOST: 127.0.0.1
@@ -82,15 +79,14 @@ jobs:
           DB_NAME: employee_db
           PYTHONPATH: ${{ github.workspace }}
         run: |
-          echo "🎭 Running Playwright tests..."
-          pytest tests/ -v --shard=${{ matrix.shard }}/4
+          pytest tests/ -v --tb=short --shard=${{ matrix.shard }}/4 -n auto
       
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results
+          name: test-results-shard-${{ matrix.shard }}
           path: |
             test-*.json
-            pytest-report.html
+            .pytest_cache/
           retention-days: 7
