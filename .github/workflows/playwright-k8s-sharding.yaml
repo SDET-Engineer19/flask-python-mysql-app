@@ -39,16 +39,9 @@ jobs:
       
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest-xdist==3.5.0 --force-reinstall
           playwright install chromium
-      
-      - name: Verify pytest-xdist installation
-        run: |
-          pip list | grep -i xdist
-          pytest --version
-          pytest --co -q 2>&1 | head -20
       
       - name: Setup database
         run: |
@@ -69,7 +62,7 @@ jobs:
           sleep 3
           curl -f http://localhost:5000/ || (cat /tmp/flask.log && exit 1)
       
-      - name: Run Playwright tests (Shard ${{ matrix.shard }}/4)
+      - name: Run Playwright tests [Shard ${{ matrix.shard }}/4]
         env:
           FLASK_URL: http://localhost:5000
           DB_HOST: 127.0.0.1
@@ -79,14 +72,12 @@ jobs:
           DB_NAME: employee_db
           PYTHONPATH: ${{ github.workspace }}
         run: |
-          pytest tests/ -v --tb=short --shard=${{ matrix.shard }}/4 -n auto
+          pytest tests/ -v --tb=short
       
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-results-shard-${{ matrix.shard }}
-          path: |
-            test-*.json
-            .pytest_cache/
+          path: test-results.json
           retention-days: 7
